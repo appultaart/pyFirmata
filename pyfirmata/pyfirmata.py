@@ -4,22 +4,26 @@ import time
 import serial
 
 from .util import two_byte_iter_to_str, to_two_bytes
+from .boards import BOARDS
 
-# Message command bytes (0x80(128) to 0xFF(255)) - straight from Firmata.h
+# Message command bytes (128-255/0x80-0xFF) - straight from Firmata.h
 DIGITAL_MESSAGE = 0x90      # send data for a digital pin
 ANALOG_MESSAGE = 0xE0       # send data for an analog pin (or PWM)
-DIGITAL_PULSE = 0x91        # SysEx command to send a digital pulse
-
-# PULSE_MESSAGE = 0xA0      # proposed pulseIn/Out msg (SysEx)
-# SHIFTOUT_MESSAGE = 0xB0   # proposed shiftOut msg (SysEx)
 REPORT_ANALOG = 0xC0        # enable analog input by pin #
 REPORT_DIGITAL = 0xD0       # enable digital input by port pair
-START_SYSEX = 0xF0          # start a MIDI SysEx msg
+
 SET_PIN_MODE = 0xF4         # set a pin to INPUT/OUTPUT/PWM/etc
-END_SYSEX = 0xF7            # end a MIDI SysEx msg
+
 REPORT_VERSION = 0xF9       # report firmware version
 SYSTEM_RESET = 0xFF         # reset from MIDI
-QUERY_FIRMWARE = 0x79       # query the firmware name
+
+START_SYSEX = 0xF0          # start a MIDI SysEx msg
+END_SYSEX = 0xF7            # end a MIDI SysEx msg
+
+DIGITAL_PULSE = 0x91        # SysEx command to send a digital pulse
+# PULSE_MESSAGE = 0xA0      # proposed pulseIn/Out msg (SysEx)
+# SHIFTOUT_MESSAGE = 0xB0   # proposed shiftOut msg (SysEx)
+
 
 # extended command set using sysex (0-127/0x00-0x7F)
 # 0x00-0x0F reserved for user-defined commands */
@@ -29,11 +33,16 @@ SHIFT_DATA = 0x75           # a bitstream to/from a shift register
 I2C_REQUEST = 0x76          # send an I2C read/write request
 I2C_REPLY = 0x77            # a reply to an I2C read request
 I2C_CONFIG = 0x78           # config I2C settings such as delay times and power pins
+CAPABILITY_QUERY = 0x6B     # ask for supported modes and resolution of all pins
+CAPABILITY_RESPONSE = 0x6C  # reply with supported modes and resolution
+ANALOG_MAPPING_QUERY = 0x69 # ask for mapping of analog to pin numbers
+ANALOG_MAPPING_RESPONSE = 0x6A # reply with mapping info
+PIN_STATE_QUERY = 0x6D      # ask for a pin's current mode and value
+PIN_STATE_RESPONSE = 0x6E   # reply with pin's current mode and value
 REPORT_FIRMWARE = 0x79      # report name and version of the firmware
 SAMPLING_INTERVAL = 0x7A    # set the poll rate of the main loop
 SYSEX_NON_REALTIME = 0x7E   # MIDI Reserved for non-realtime messages
 SYSEX_REALTIME = 0x7F       # MIDI Reserved for realtime messages
-
 
 # Pin modes.
 # except from UNAVAILABLE taken from Firmata.h
@@ -42,11 +51,14 @@ INPUT = 0          # as defined in wiring.h
 OUTPUT = 1         # as defined in wiring.h
 ANALOG = 2         # analog pin in analogInput mode
 PWM = 3            # digital pin in PWM output mode
-SERVO = 4          # digital pin in SERVO mode
+SERVO = 4          # digital pin in SERVO output mode
+SHIFT = 5          # shiftIn/shiftOut mode
+I2C = 6            # pin included in I2C setup
 
 # Pin types
 DIGITAL = OUTPUT   # same as OUTPUT below
 # ANALOG is already defined above
+
 
 class PinAlreadyTakenError(Exception):
     pass
@@ -65,29 +77,52 @@ class Board(object):
     firmware = None
     firmware_version = None
     _command_handlers = {}
-    _command = None
-    _stored_data = []
-    _parsing_sysex = False
+    pins = {}       # stores Pin information
+    ports = {}      # stores Port information
+#    _command = None                  #DV not sure why this is here, it is not used?
+#    _stored_data = []                #DV not sure why this is here, it is not used?
+#    _parsing_sysex = False           #DV not sure why this is here, it is not used?
     
-    def __init__(self, port, layout, baudrate=57600, name=None):
+    def __init__(self, port, layout="autodetect", baudrate=57600, name=None):
         self.sp = serial.Serial(port, baudrate)
         # Allow 5 secs for Arduino's auto-reset to happen
         # Alas, Firmata blinks it's version before printing it to serial
         # For 2.3, even 5 seconds might not be enough.
         # TODO Find a more reliable way to wait until the board is ready
-        self.pass_time(5)
+        self.pass_time(6)       # DV: 6 seconds works better than the original 5 s
         self.name = name
         if not self.name:
             self.name = port
-        self.setup_layout(layout)
+        
+        # Setup default handlers for standard incoming commands
+        self.add_cmd_handler(ANALOG_MESSAGE, self._handle_analog_message)
+        self.add_cmd_handler(DIGITAL_MESSAGE, self._handle_digital_message)
+        self.add_cmd_handler(REPORT_VERSION, self._handle_report_version)
+        self.add_cmd_handler(REPORT_FIRMWARE, self._handle_report_firmware)
+        self.add_cmd_handler(CAPABILITY_RESPONSE, self._handle_capability_query)
+        self.add_cmd_handler(ANALOG_MAPPING_RESPONSE, self._handle_analog_mapping_query)
+        #self.add_cmd_handler(PIN_STATE_RESPONSE, self._handle_pin_state_query)
+        #self.add_cmd_handler(STRING_DATA, self._handle_string_data)
+
+#        if self.firmata_version is None and self.firmware is None:
+#            print("Has Firmata been installed on your board?")
+
         # Iterate over the first messages to get firmware data
         while self.bytes_available():
             self.iterate()
-        # TODO Test whether we got a firmware name and version, otherwise there 
-        # probably isn't any Firmata installed
+
+        # Add layout-specific details to the board
+        if layout == "autodetect":
+            self.autodetect_layout()
+            # Iterate over the incoming Query Result message
+            # Note that this might take some time... If problems, check the
+            # autodetect-function and increase the pass_time() line.
+        else:
+            self.predefined_layout(layout)
+            
         
     def __str__(self):
-        return "Board{0.name} on {0.sp.port}".format(self)
+        return "Board {0.name} on {0.sp.port}".format(self)
         
     def __del__(self):
         ''' 
@@ -97,48 +132,149 @@ class Board(object):
         '''
         self.exit()
         
+
     def send_as_two_bytes(self, val):
         self.sp.write(bytearray([val % 128, val >> 7]))
 
-    def setup_layout(self, board_layout):
-        """
-        Setup the Pin instances based on the given board-layout. Maybe it will
-        be possible to do this automatically in the future, by polling the
-        board for its type.
-        """
-        # Create pin instances based on board layout
-        self.analog = []
-        for i in board_layout['analog']:
-            self.analog.append(Pin(self, i))
 
-        self.digital = []
-        self.digital_ports = []
-        for i in range(0, len(board_layout['digital']), 8):
-            num_pins = len(board_layout['digital'][i:i+8])
-            port_number = int(i / 8)
-            self.digital_ports.append(Port(self, port_number, num_pins))
+    def autodetect_layout(self):
+        """Use Capability Query to automatically detect board layout.
+        """
+        print("INFO: Trying to auto-detect the board layout...")
 
-        # Allow to access the Pin instances directly
-        for port in self.digital_ports:
-            self.digital += port.pins
+        # Send the Capability Query request
+        self.sp.write(bytearray([0xF0, 0x6B, 0xF7]))
+        # On Arduino Duemilanove, reading the full query takes ~ 0.03 s.
+        # If a board hangs on this step, try to increase the pass_time period
+        #     which adds more time to receive all data sent.
+        self.pass_time(2)
+        while self.bytes_available():
+            self.iterate()
+        print("INFO: Capability Query Response received...")
+
+        # Send the Analog Mapping Query request
+        self.sp.write(bytearray([0xF0, 0x69, 0xF7]))
+        self.pass_time(2)
+        while self.bytes_available():
+            self.iterate()
+        print("INFO: Analog Mapping Query Response received...")
         
-        # Setup PWM pins
-        for i in board_layout['pwm']:
-            self.digital[i].PWM_CAPABLE = True
+        # Construct the Ports. 
+        # CHECK It appears that two different approaches can be taken:
+        #  1. define Ports as 'having 8 pins', start with first pin reported, 
+        #     add until 8 pins are found. This approach is taken by the 
+        #     Firmata stand-alone test program found at http://www.pjrc.com/tmp/firmata/readme.html
+        #     and is used also here.
+        #  2. define Ports as looking at the chip layout. This approach is taken
+        #     by the Arduino's native code, where for example PORTB maps to 
+        #     pins 8-13 (i.e., 6 pins for this port). 
+        # The Firmata protocol seems to use case (1), so let's follow that for now
+        
 
-        # Disable certain ports like Rx/Tx and crystal ports
-        for i in board_layout['disabled']:
-            self.digital[i].mode = UNAVAILABLE
+        # Get a sequence of pin numbers. Note that range(0, len(self.pins)) won't work:
+        # it is not guaranteed that pin numbers are all sequential and start at 0
+        pin_nrs = []
+        for pin in self.pins:
+#DEBUG            print("pin, type", pin, type(pin))
+#DEBUG            print("self pins, type", self.pins, type(self.pins))
+            pin_nrs.append(self.pins[pin].pin_number)
+        pin_nrs = sorted(pin_nrs)
 
-        # Create a dictionary of 'taken' pins. Used by the get_pin method
-        self.taken = { 'analog' : dict(map(lambda p: (p.pin_number, False), self.analog)),
-                       'digital' : dict(map(lambda p: (p.pin_number, False), self.digital)) }
+        # bin the pins to ports
+        total_ports = divmod(len(self.pins), 8)[0] + 1
+        for portNr in range(total_ports):
+            pins_in_this_port = pin_nrs[0 + portNr*8:8 + portNr*8]
+            self.ports[portNr] = Port(self, portNr, pins_in_this_port)
 
-        # Setup default handlers for standard incoming commands
-        self.add_cmd_handler(ANALOG_MESSAGE, self._handle_analog_message)
-        self.add_cmd_handler(DIGITAL_MESSAGE, self._handle_digital_message)
-        self.add_cmd_handler(REPORT_VERSION, self._handle_report_version)
-        self.add_cmd_handler(REPORT_FIRMWARE, self._handle_report_firmware)
+        print("INFO: The board reports the following information:")
+        self.report_board_information()
+
+
+
+
+    def predefined_layout(self, board_layout):
+        """
+        Setup the Pin instances based on a given board-layout. 
+        
+        (If the 'autodetect' function does not work....)
+        """
+        # Assume that every digital port has INPUT, OUTPUT mode
+        # Number of pins is equal to the digital pins available (including UNAVAILABLE pins)
+        print("BOARD LAYOUT:", board_layout)
+
+        for nr in board_layout['digital']:
+            self.pins[nr] = Pin(self, nr)
+            self.pins[nr].INPUT_CAPABLE = True
+            self.pins[nr].OUTPUT_CAPABLE = True
+        
+        # Mark the unavailable pins
+        for nr in board_layout['unavailable']:
+            self.pins[nr].mode = UNAVAILABLE
+        
+        # Mark PWM, SERVO, I2C pins:
+        for nr in board_layout['pwm']:
+            self.pins[nr].PWM_CAPABLE = True
+        for nr in board_layout['i2c']:
+            self.pins[nr].I2C_CAPABLE = True
+        for nr in board_layout['servo']:
+            self.pins[nr].SERVO_CAPABLE = True
+
+        # mark Analog pins
+        for nr in board_layout['analog']:
+            self.pins[nr].ANALOG_CAPABLE = True
+
+        # bin the pins to ports
+        pin_nrs = []
+        for pin in self.pins:
+            pin_nrs.append(self.pins[pin].pin_number)
+        pin_nrs = sorted(pin_nrs)
+
+        total_ports = divmod(len(self.pins), 8)[0] + 1
+        for portNr in range(total_ports):
+            pins_in_this_port = pin_nrs[0 + portNr*8:8 + portNr*8]
+            self.ports[portNr] = Port(self, portNr, pins_in_this_port)
+
+        print("INFO: The following information is available for this board:")
+        self.report_board_information()
+
+
+
+
+
+         #Create pin instances based on board layout
+        #self.analog = []
+        #for i in board_layout['analog']:
+            #self.analog.append(Pin(self, i))
+
+        #self.digital = []
+        #self.digital_ports = []
+        #for i in range(0, len(board_layout['digital']), 8):
+            #num_pins = len(board_layout['digital'][i:i+8])
+            #port_number = int(i / 8)
+            #self.digital_ports.append(Port(self, port_number, num_pins))
+
+        ## Allow to access the Pin instances directly
+        #for port in self.digital_ports:
+            #self.digital += port.pins
+        
+        ## Setup PWM pins
+        #for i in board_layout['pwm']:
+            #self.digital[i].PWM_CAPABLE = True
+
+        ## Disable certain ports like Rx/Tx and crystal ports
+        #for i in board_layout['disabled']:
+            #self.digital[i].mode = UNAVAILABLE
+
+        ## Create a dictionary of 'taken' pins. Used by the get_pin method
+        #self.taken = { 'analog' : dict(map(lambda p: (p.pin_number, False), self.analog)),
+                       #'digital' : dict(map(lambda p: (p.pin_number, False), self.digital)) }
+
+        ## Setup default handlers for standard incoming commands
+        #self.add_cmd_handler(ANALOG_MESSAGE, self._handle_analog_message)
+        #self.add_cmd_handler(DIGITAL_MESSAGE, self._handle_digital_message)
+        #self.add_cmd_handler(REPORT_VERSION, self._handle_report_version)
+        #self.add_cmd_handler(REPORT_FIRMWARE, self._handle_report_firmware)
+
     
     def add_cmd_handler(self, cmd, func):
         """ 
@@ -322,20 +458,126 @@ class Board(object):
         self.firmware_version = (major, minor)
         self.firmware = two_byte_iter_to_str(data[2:])
 
+
+    def _handle_capability_query(self, *data):
+        """
+        Query the microcontroller board for pin capabilities.
+        This is the answer to the query 'F0 6B F7'.
+        
+        From the Firmata protocol: 
+         'Each pin shall have 2 bytes for each supported mode, and a 
+          single 127 (0x7F) to mark the end of that pin's data. 
+          The number of pins supported shall be inferred by the message length. 
+          (...). The resolution information may be used to adapt to future 
+          implementations where PWM, Analog and others may have different resolution. 
+        """
+
+        print("INFO: Analyzing the board Capability Query response...")
+        print("INFO: There are {0} pins detected".format(data.count(0x7F)))
+                
+        for nr in range(data.count(0x7F)):
+            pin_info = data[:data.index(0x7F)]
+
+            # Instantiate a new pin
+            self.pins[nr] = Pin(self, nr)
+            
+            if len(pin_info) == 0:
+                # pin data is only 127 (0x7F): pin is reported as unavailable
+                # (NB this is confirmed for D0 and D1 (RX/TX) on Arduino Duemilanove, not for other boards)
+                self.pins[nr].mode = UNAVAILABLE
+
+            elif len(pin_info) % 2 != 0:
+                # each pin has 2 bytes per mode; if odd length, something is wrong
+                raise IOError("ERROR: Pin {0} reports incorrect mode information: {1}"
+                       .format(nr, pin_info))
+
+            else:
+                for mode_info in range(0, len(pin_info), 2):
+                    if pin_info[mode_info] == INPUT:
+                        self.pins[nr].INPUT_CAPABLE = True
+                    if pin_info[mode_info] == OUTPUT:
+                        self.pins[nr].OUTPUT_CAPABLE = True
+                    if pin_info[mode_info] == ANALOG:
+                        self.pins[nr].ANALOG_CAPABLE = True
+                    if pin_info[mode_info] == PWM:
+                        self.pins[nr].PWM_CAPABLE = True
+                    if pin_info[mode_info] == SERVO:
+                        self.pins[nr].SERVO_CAPABLE = True
+                    if pin_info[mode_info] == I2C:
+                        self.pins[nr].I2C_CAPABLE = True
+
+                # Proceed to next pin's data
+            data = data[data.index(0x7F)+1:]
+
+
+    def _handle_analog_mapping_query(self, *data):
+        """
+        Query the microcontroller board for which pins are mapped as analog
+        This is the answer to the query 'F0 69 F7'.        
+        """
+        print("INFO: Analyzing the board Analog Mapping response...")
+        print("INFO: {0} pins will be analyzed".format(len(data)))
+
+        for nr in range(len(data)):
+            if data[nr] != 0x7F:            # 0xF7/127: no analog pin
+                self.pins[nr].ANALOG_QUERIED = data[nr]
+
+
+    def report_board_information(self):
+        """Reports general information about the current board"""
+
+        analog = []
+        servo = []
+        pwm = []
+        i2c = []
+        unavailable = []
+        analog_queried = []
+
+        for pin in self.pins:
+            if self.pins[pin].ANALOG_CAPABLE is True:
+                analog.append(pin)
+            if self.pins[pin].SERVO_CAPABLE is True:
+                servo.append(pin)
+            if self.pins[pin].PWM_CAPABLE is True:
+                pwm.append(pin)
+            if self.pins[pin].I2C_CAPABLE is True:
+                i2c.append(pin)
+            if self.pins[pin].mode is UNAVAILABLE:
+                unavailable.append(pin)
+            if self.pins[pin].ANALOG_QUERIED is not None:
+                analog_queried.append("D{0.pin_number}=A{0.ANALOG_QUERIED}".
+                                    format(self.pins[pin]))
+        
+        report = """
+        > Board {0.name}, running '{0.firmware}' version {0.firmata_version[0]}.{0.firmata_version[1]}.
+        > Port {0.sp.port}, serial info {0.sp}
+
+        > Pin information
+          ANALOG        {1}
+          ANALOG_MAPPED {2}
+          PWM           {3}
+          SERVO         {4}
+          I2C pins      {5}
+          UNAVAILABLE:  {6}""".format(self, analog, analog_queried, pwm, servo, i2c, unavailable)
+        print(report)
+        
+        for i in self.ports:
+            print("port:", i, self.ports[i].pins)
+
+
+
 class Port(object):
     """ An 8-bit port on the board """
-    def __init__(self, board, port_number, num_pins=8):
+    def __init__(self, board, port_number, pins):
         self.board = board
         self.port_number = port_number
         self.reporting = False
-        
-        self.pins = []
-        for i in range(num_pins):
-            pin_nr = i + self.port_number * 8
-            self.pins.append(Pin(self.board, pin_nr, type=DIGITAL, port=self))
-            
+        self.pins = tuple(pins)     # tuple of pin numbers associated with this port
+
+
     def __str__(self):
-        return "Digital Port {0.port_number} on {0.board}".format(self)
+        return "Port {0.port_number} on {0.board}".format(self)
+
         
     def enable_reporting(self):
         """ Enable reporting of values for the whole port """
@@ -351,8 +593,12 @@ class Port(object):
     def disable_reporting(self):
         """ Disable the reporting of the port """
         self.reporting = False
+        for pin in self.pins:
+            if pin.mode == INPUT:
+                pin.reporting = False
         msg = bytearray([REPORT_DIGITAL + self.port_number, 0])
         self.board.sp.write(msg)
+        
                 
     def write(self):
         """Set the output pins of the port to the correct state"""
@@ -360,11 +606,9 @@ class Port(object):
         for pin in self.pins:
             if pin.mode == OUTPUT:
                 if pin.value == 1:
-                    pin_nr = pin.pin_number - self.port_number * 8
+                    pin_nr = self.pins.index(pin)
+#                    pin_nr = pin.pin_number - self.port_number * 8
                     mask |= 1 << int(pin_nr)
-#        print("type mask", type(mask))
-#        print("type self.portnumber", type(self.port_number))
-#        print("type pinnr", type(pin_nr))
         msg = bytearray([DIGITAL_MESSAGE + self.port_number, mask % 128, mask >> 7])
         self.board.sp.write(msg)
         
@@ -378,58 +622,127 @@ class Port(object):
                     pin_nr = pin.pin_number - self.port_number * 8
                     pin.value = (mask & (1 << pin_nr)) > 0
 
+
 class Pin(object):
-    """ A Pin representation """
-    def __init__(self, board, pin_number, type=ANALOG, port=None):
+    """ A Pin representation 
+    
+    Each 'pin' instance is linked to a physical pin on the board. 
+    It stores information about its own state, value, capabilities, etc.
+    """
+    def __init__(self, board, pin_number):
         self.board = board
         self.pin_number = pin_number
-        self.type = type
-        self.port = port
-        self.PWM_CAPABLE = False
-        self._mode = (type == DIGITAL and OUTPUT or INPUT)
-        self.reporting = False
         self.value = None
-        
-    def __str__(self):
-        type = {ANALOG : 'Analog', DIGITAL : 'Digital'}[self.type]
-        return "{0} pin {1}".format(type, self.pin_number)
+        self.reporting = False
+        self.taken = False
+        self._mode = INPUT           # See http://arduino.cc/en/Tutorial/DigitalPins:
+                                     # 'Arduino (Atmega) pins default to inputs (...)'
+        self.INPUT_CAPABLE = False
+        self.OUTPUT_CAPABLE = False
+        self.ANALOG_CAPABLE = False
+        self.ANALOG_QUERIED = None
+        self.PWM_CAPABLE = False
+        self.SERVO_CAPABLE = False
+        self.I2C_CAPABLE = False
 
-    def _set_mode(self, mode):
-        if mode is UNAVAILABLE:
-            self._mode = UNAVAILABLE
-            return
-        if self._mode is UNAVAILABLE:
-            raise IOError("{0} can not be used through Firmata".format(self))
-        if mode is PWM and not self.PWM_CAPABLE:
-            raise IOError("{0} does not have PWM capabilities".format(self))
-        if mode == SERVO:
-            if self.type != DIGITAL:
-                raise IOError("Only digital pins can drive servos! {0} is not"
-                    "digital".format(self))
-            self._mode = SERVO
-            self.board.servo_config(self.pin_number)
-            return
-        
-        # Set mode with SET_PIN_MODE message
-        self._mode = mode        
-        self.sp.write(bytearray([SET_PIN_MODE, self.pin_number, mode]))
-        if mode == INPUT:
-            self.enable_reporting()
-        
+
+    def __str__(self):
+        return "Pin {0.pin_number}, mode {0.mode}, value {0.value}".format(self)
+
+
     def _get_mode(self):
+        """Getter function for the pin mode"""
         return self._mode
-        
+
+
+    def _set_mode(self, new_mode):
+        """Setter function for the pin mode"""
+
+        # Some sanity checks
+        if new_mode not in {UNAVAILABLE, INPUT, OUTPUT, ANALOG, PWM, SERVO, I2C}:
+            raise InvalidPinDefError("ERROR: Mode {0} is not recognized".format(new_mode))
+        if self._mode == UNAVAILABLE:
+            raise InvalidPinDefError("ERROR: Pin {0} is UNAVAILABLE".format(self.pin_nr))
+        if self.taken == True:
+            print("WARNING: Pin {0} is already taken".format(self.pin_nr))
+
+        # Set the mode
+        if new_mode == UNAVAILABLE:
+            # Make sure no function accidently will use any of the Boolean indicators
+            self._mode = UNAVAILABLE
+            self.taken = True
+            self.reporting = False
+            self.value = None
+            return
+
+        elif new_mode == INPUT:
+            if self.INPUT_CAPABLE:
+                self._mode = INPUT
+                self.reporting = True      # reporting is set per digital port
+                self.taken = True
+            else:
+                raise InvalidPinDefError("ERROR: Pin {0} has no INPUT mode".format(self.pin_number))
+
+        elif new_mode == OUTPUT:
+            if self.OUTPUT_CAPABLE:
+                self._mode = OUTPUT
+                self.taken = True
+                self.reporting = False
+            else:
+                raise InvalidPinDefError("ERROR: Pin {0} has no OUTPUT mode".format(self.pin_number))
+
+        elif new_mode is ANALOG:
+            if self.ANALOG_CAPABLE:
+                self._mode = ANALOG
+                self.reporting = True
+                self.taken = True
+            else:
+                print("WARNING: Pin {0} has no ANALOG mode".format(self.pin_number))
+
+        elif new_mode == SERVO:
+            if self.SERVO_CAPABLE:
+                self._mode = SERVO
+                self.taken = True
+                self.reporting = False
+                # TODO
+# DV TODO                self.servo_config(pin_nr)
+            else:
+                raise InvalidPinDefError("ERROR: Pin {0} is not SERVO capable".format(self.pin_number))
+
+        elif new_mode == PWM:
+            if self.PWM_CAPABLE:
+                self.taken = True
+                self._mode = PWM
+                self.reporting = False
+            else:
+                raise InvalidPinDefError("ERROR: Pin {0} is not PWM capable".format(self.pin_number))
+
+        elif new_mode == I2C:
+            if self.I2C_CAPABLE:
+                self.taken = True
+                self._mode = I2C
+                self.reporting = False
+                self.value = None
+            else:
+                raise InvalidPinDefError("ERROR: Pin {0} is not I2C capable".format(self.pin_number))
+
+        print("Writing pin mode to board...")
+        self.board.sp.write(bytearray([SET_PIN_MODE, self.mode, self.pin_number]))
+
+
     mode = property(_get_mode, _set_mode)
     """
-    Mode of operation for the pin. Can be one of the pin modes: INPUT, OUTPUT,
-    ANALOG, PWM or SERVO (or UNAVAILABLE)
-    """
+    Mode of operation for the pin. 
     
+    Can be one of the pin modes: UNAVAILABLE, INPUT, OUTPUT, ANALOG, PWM, SERVO, I2C
+    """
+
+
     def enable_reporting(self):
         """ Set an input pin to report values """
         if self.mode is not INPUT:
-            raise IOError("{0} is not an input and can therefore not report".format(self))
-        if self.type == ANALOG:
+            raise IOError("ERROR: Pin {0} is not an input and can therefore not report".format(self.pin_nr))
+        if self.mode == ANALOG:
             self.reporting = True
             msg = bytearray([REPORT_ANALOG + self.pin_number, 1])
             self.board.sp.write(msg)
@@ -438,7 +751,7 @@ class Pin(object):
         
     def disable_reporting(self):
         """ Disable the reporting of an input pin """
-        if self.type == ANALOG:
+        if self.mode == ANALOG:
             self.reporting = False
             msg = bytearray([REPORT_ANALOG + self.pin_number, 0])
             self.board.sp.write(msg)
@@ -451,7 +764,7 @@ class Pin(object):
         boards :meth:`Board.iterate` method. Value is alway in the range 0.0 - 1.0
         """
         if self.mode == UNAVAILABLE:
-            raise IOError("Cannot read pin {0}".format(self.__str__()))
+            raise IOError("ERROR: Cannot read pin {0}".format(self.__str__()))
         return self.value
         
     def write(self, value):
@@ -464,9 +777,9 @@ class Pin(object):
         
         """
         if self.mode is UNAVAILABLE:
-            raise IOError("{0} can not be used through Firmata".format(self))
+            raise IOError("ERROR: {0} can not be used through Firmata".format(self))
         if self.mode is INPUT:
-            raise IOError("{0} is set up as an INPUT and can therefore not be written to".format(self))
+            raise IOError("ERROR: {0} is set up as an INPUT and can therefore not be written to".format(self))
         if value is not self.value:
             self.value = value
             if self.mode is OUTPUT:
@@ -483,3 +796,21 @@ class Pin(object):
                 value = int(value)
                 msg = bytearray([ANALOG_MESSAGE + self.pin_number, value % 128, value >> 7])
                 self.board.sp.write(msg)
+
+
+    def report_pin_information(self):
+        """Print the pin state onto the screen -- (for debugging purposes)"""
+
+        report = """> Report on Pin {0.pin_number}:
+                    > mode            = {0.mode}
+                    > value           = {0.value}
+                    > INPUT_CAPABLE   = {0.INPUT_CAPABLE}
+                    > OUTPUT_CAPABLE  = {0.OUTPUT_CAPABLE}
+                    > ANALOG_CAPABLE  = {0.ANALOG_CAPABLE}
+                    > ANALOG_QUERIED  = {0.ANALOG_QUERIED}
+                    > SERVO_CAPABLE   = {0.SERVO_CAPABLE}
+                    > PWM_CAPABLE     = {0.PWM_CAPABLE}
+                    > I2C_CAPABLE     = {0.I2C_CAPABLE}
+                    > reporting       = {0.reporting}""".format(self)
+        print(report)
+        return
