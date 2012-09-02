@@ -655,8 +655,8 @@ class Port(object):
         self.board.sp.write(msg)
 
         for pin in self.pins:
-            if pin.mode == INPUT:
-                pin.reporting = True # TODO Shouldn't this happen at the pin?
+            if self.board.pins[pin].mode == INPUT:
+                self.board.pins[pin].reporting = True # TODO Shouldn't this happen at the pin?
 
         
     def disable_reporting(self):
@@ -665,8 +665,8 @@ class Port(object):
         msg = bytearray([REPORT_DIGITAL + self.port_number, 0])
 
         for pin in self.pins:
-            if pin.mode == INPUT:
-                pin.reporting = False
+            if self.board.pins[pin] == INPUT:
+                self.board.pins[pin].reporting = False
 
 
     def write(self):
@@ -799,8 +799,7 @@ class Pin(object):
             else:
                 raise InvalidPinDefError("ERROR: Pin {0} is not I2C capable".format(self.pin_number))
 
-#DEBUG        print("Writing pin mode to board...")
-        self.board.sp.write(bytearray([SET_PIN_MODE, self.mode, self.pin_number]))
+        self.board.sp.write(bytearray([SET_PIN_MODE, self.pin_number, self.mode]))
 
 
     mode = property(_get_mode, _set_mode)
