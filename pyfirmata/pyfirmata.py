@@ -732,16 +732,20 @@ class Pin(object):
     def _set_mode(self, new_mode):
         """Setter function for the pin mode"""
 
+        if type(new_mode) is str:
+            new_mode = new_mode.lower()
+
         # Some sanity checks
-        if new_mode not in {UNAVAILABLE, INPUT, OUTPUT, ANALOG, PWM, SERVO, I2C}:
+        if new_mode not in {UNAVAILABLE, INPUT, OUTPUT, ANALOG, PWM, SERVO, I2C,
+                             'unavailable', 'input', 'output', 'analog', 'pwm', 'servo', 'i2c'}:
             raise InvalidPinDefError("ERROR: Mode {0} is not recognized".format(new_mode))
-        if self._mode == UNAVAILABLE:
+        if self._mode in {UNAVAILABLE, 'unavailable'}:
             raise InvalidPinDefError("ERROR: Pin {0} is UNAVAILABLE".format(self.pin_nr))
         if self.taken == True:
             print("WARNING: Pin {0} is already taken".format(self.pin_nr))
 
         # Set the mode
-        if new_mode == UNAVAILABLE:
+        if new_mode in {UNAVAILABLE, 'unavailable'}:
             # Make sure no function accidently will use any of the Boolean indicators
             self._mode = UNAVAILABLE
             self.taken = True
@@ -749,7 +753,7 @@ class Pin(object):
             self.value = None
             return
 
-        elif new_mode == INPUT:
+        elif new_mode in {INPUT, 'input'}:
             if self.INPUT_CAPABLE:
                 self._mode = INPUT
                 self.reporting = False      # reporting is set per digital port
@@ -757,7 +761,7 @@ class Pin(object):
             else:
                 raise InvalidPinDefError("ERROR: Pin {0} has no INPUT mode".format(self.pin_number))
 
-        elif new_mode == OUTPUT:
+        elif new_mode in {OUTPUT, 'output'}:
             if self.OUTPUT_CAPABLE:
                 self._mode = OUTPUT
                 self.taken = True
@@ -765,7 +769,7 @@ class Pin(object):
             else:
                 raise InvalidPinDefError("ERROR: Pin {0} has no OUTPUT mode".format(self.pin_number))
 
-        elif new_mode is ANALOG:
+        elif new_mode in {ANALOG, 'analog'}:
             if self.ANALOG_CAPABLE:
                 self._mode = ANALOG
                 self.reporting = False
@@ -773,7 +777,7 @@ class Pin(object):
             else:
                 print("WARNING: Pin {0} has no ANALOG mode".format(self.pin_number))
 
-        elif new_mode == SERVO:
+        elif new_mode in {SERVO, 'servo'}:
             if self.SERVO_CAPABLE:
                 self._mode = SERVO
                 self.taken = True
@@ -782,7 +786,7 @@ class Pin(object):
             else:
                 raise InvalidPinDefError("ERROR: Pin {0} is not SERVO capable".format(self.pin_number))
 
-        elif new_mode == PWM:
+        elif new_mode in {PWM, 'pwm'}:
             if self.PWM_CAPABLE:
                 self.taken = True
                 self._mode = PWM
@@ -790,7 +794,7 @@ class Pin(object):
             else:
                 raise InvalidPinDefError("ERROR: Pin {0} is not PWM capable".format(self.pin_number))
 
-        elif new_mode == I2C:
+        elif new_mode in {I2C, 'i2c'}:
             if self.I2C_CAPABLE:
                 self.taken = True
                 self._mode = I2C
