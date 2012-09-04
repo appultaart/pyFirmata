@@ -3,7 +3,7 @@ import time
 
 import serial
 
-from .util import two_byte_iter_to_str, to_two_bytes
+from .util import two_byte_iter_to_str, to_two_bytes, from_two_bytes
 from .boards import BOARDS
 
 # Message command bytes (128-255/0x80-0xFF) - straight from Firmata.h
@@ -80,6 +80,7 @@ class Board(object):
     pins = {}       # stores Pin information
     ports = {}      # stores Port information
     map_analog_to_digital = {}      # key = analog, value = digital pin nr.
+    messages_received = []
 #    _command = None                  #DV not sure why this is here, it is not used?
 #    _stored_data = []                #DV not sure why this is here, it is not used?
 #    _parsing_sysex = False           #DV not sure why this is here, it is not used?
@@ -103,7 +104,7 @@ class Board(object):
         self.add_cmd_handler(CAPABILITY_RESPONSE, self._handle_capability_query)
         self.add_cmd_handler(ANALOG_MAPPING_RESPONSE, self._handle_analog_mapping_query)
         #self.add_cmd_handler(PIN_STATE_RESPONSE, self._handle_pin_state_query)
-        #self.add_cmd_handler(STRING_DATA, self._handle_string_data)
+        self.add_cmd_handler(STRING_DATA, self._handle_string_data)
 
 #        if self.firmata_version is None and self.firmware is None:
 #            print("Has Firmata been installed on your board?")
@@ -589,6 +590,23 @@ class Board(object):
                 self.pins[nr].ANALOG_QUERIED = data[nr]
                 self.map_analog_to_digital[data[nr]] = self.pins[nr].pin_number
 
+
+    def _handle_string_data(self, *data):
+        """Handle incoming string data (0x71)
+        
+        Note that string messages can be relatively long -- make sure that the
+        whole string to up to the END_SYSEX is received or the string will not
+        be displayed. Easiest is to open an 'it = iter.Iterator(board)' instance"""
+
+        msg = []
+        for pair in range(0, len(data), 2):
+            together = from_two_bytes((data[pair], data[pair+1]))
+            msg.append(chr(together))
+        
+        print("Firmata sent the message '{0}'".format("".join(msg)))
+        # store the message, in case someone tests for a message appearing
+        self.messages_received.append("".join(msg))
+        
 
     def report_board_information(self):
         """Reports general information about the current board"""
