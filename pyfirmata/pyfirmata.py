@@ -474,8 +474,8 @@ class Board(object):
         # First detach all servo's, otherwise it somehow doesn't want to close...
         # FIXME
         for pin in self.pins:
-            if pin.mode == SERVO:
-                pin.mode = OUTPUT
+            if self.pins[pin].mode == SERVO:
+                self.pins[pin].mode = OUTPUT
         if hasattr(self, 'sp'):
             self.sp.close()
         
