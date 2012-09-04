@@ -103,7 +103,7 @@ class Board(object):
         self.add_cmd_handler(REPORT_FIRMWARE, self._handle_report_firmware)
         self.add_cmd_handler(CAPABILITY_RESPONSE, self._handle_capability_query)
         self.add_cmd_handler(ANALOG_MAPPING_RESPONSE, self._handle_analog_mapping_query)
-        #self.add_cmd_handler(PIN_STATE_RESPONSE, self._handle_pin_state_query)
+        self.add_cmd_handler(PIN_STATE_RESPONSE, self._handle_pin_state_query)
         self.add_cmd_handler(STRING_DATA, self._handle_string_data)
 
 #        if self.firmata_version is None and self.firmware is None:
@@ -606,7 +606,28 @@ class Board(object):
         print("Firmata sent the message '{0}'".format("".join(msg)))
         # store the message, in case someone tests for a message appearing
         self.messages_received.append("".join(msg))
+
+
+    def _handle_pin_state_query(self, *data):
+        """
+        Query the microcontroller board for one pin state.
+        This is the answer to the query 'F0 6D [pin] F7'. 
         
+        (Note: make sure that all data are captured, for example by 
+        running the 'iter.Iterator(board)' function continuously.
+        """
+        queried_pin = data[0]
+        queried_mode = data[1]
+        
+        if len(data[2:]) == 1:
+            queried_state = data[2]
+        else:
+            queried_state = data[2:]
+
+        print("Pin {0} has mode {1} with data {2}".
+                format(queried_pin, queried_mode, queried_state))
+
+
 
     def report_board_information(self):
         """Reports general information about the current board"""
@@ -882,6 +903,21 @@ class Pin(object):
         Note: this function is a proxy for the 'board.write_pin()' method.
         """
         return self.board.write_pin(self.pin_number, value)
+
+
+    def query_state(self):
+        """Query the state of this pin
+        
+        From the Firmata protocol:
+        The pin state query allows the GUI to read the current configuration 
+        of any pin. Normally this is needed when a GUI-based program starts up, 
+        so it can populate on-screen controls with an accurate representation 
+        of the hardware's configuration. This query can also be used to 
+        verify pin mode settings are received properly.
+        """
+
+        self.board.sp.write(bytearray([START_SYSEX, PIN_STATE_QUERY, self.pin_number, END_SYSEX]))
+
 
 
     def report_pin_information(self):
