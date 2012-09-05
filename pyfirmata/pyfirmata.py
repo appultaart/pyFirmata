@@ -887,6 +887,7 @@ class Pin(object):
                 raise InvalidPinDefError("ERROR: Pin {0} is not I2C capable".format(self.pin_number))
 
         self.board.sp.write(bytearray([SET_PIN_MODE, self.pin_number, self.mode]))
+        self.enable_reporting()
 
 
     mode = property(_get_mode, _set_mode)
