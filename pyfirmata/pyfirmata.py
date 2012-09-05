@@ -11,15 +11,11 @@ DIGITAL_MESSAGE = 0x90      # send data for a digital pin
 ANALOG_MESSAGE = 0xE0       # send data for an analog pin (or PWM)
 REPORT_ANALOG = 0xC0        # enable analog input by pin #
 REPORT_DIGITAL = 0xD0       # enable digital input by port pair
-
 SET_PIN_MODE = 0xF4         # set a pin to INPUT/OUTPUT/PWM/etc
-
 REPORT_VERSION = 0xF9       # report firmware version
 SYSTEM_RESET = 0xFF         # reset from MIDI
-
 START_SYSEX = 0xF0          # start a MIDI SysEx msg
 END_SYSEX = 0xF7            # end a MIDI SysEx msg
-
 DIGITAL_PULSE = 0x91        # SysEx command to send a digital pulse
 # PULSE_MESSAGE = 0xA0      # proposed pulseIn/Out msg (SysEx)
 # SHIFTOUT_MESSAGE = 0xB0   # proposed shiftOut msg (SysEx)
@@ -276,38 +272,83 @@ class Board(object):
         :arg pin_def: Pin definition as described in TODO,
             but without the arduino name. So for example ``a:1:i``.
         
+        (Comment DV: this function combines two separate functions:
+          a) assign a pin instance to variable
+          b) set the pin mode
+         I am not sure if this is the most elegant way to proceed here: 
+         generally speaking, combining two operations within one function
+         is not the best way to go IMO. 
+         
+         What's wrong with two lines: 
+            pin3 = board.pins[3]    # assign pin instance
+            pin3.mode = 'pwm'       # set the pin mode
+        Instead of the less easy to comprehend:
+            pin3 = board.getpin('d:3:p')
+            
+         For now, I leave it here for compatibility reasons. I think it can
+         be marked for depreciation, though...)
         """
         if type(pin_def) == list:
             bits = pin_def
         else:
             bits = pin_def.split(':')
-        a_d = bits[0] == 'a' and 'analog' or 'digital'
-        part = getattr(self, a_d)
+
+        a_d = bits[0].lower()           # in case 'A:1:P' is used
         pin_nr = int(bits[1])
-        if pin_nr >= len(part):
-            raise InvalidPinDefError('Invalid pin definition: {0} at position 3 on {1}'.format(pin_def, self.name))
-        if getattr(part[pin_nr], 'mode', None)  == UNAVAILABLE:
-            raise InvalidPinDefError('Invalid pin definition: UNAVAILABLE pin {0} at position on {1}'.format(pin_def, self.name))
-        if self.taken[a_d][pin_nr]:
-            raise PinAlreadyTakenError('{0} pin {1} is already taken on {2}'.format(a_d, bits[1], self.name))
-        # ok, should be available
-        pin = part[pin_nr]
-        self.taken[a_d][pin_nr] = True
-        if pin.type is DIGITAL:
-            if bits[2] == 'p':
-                pin.mode = PWM
-            elif bits[2] == 's':
-                pin.mode = SERVO
-            elif bits[2] is not 'o':
-                pin.mode = INPUT
+        new_mode = bits[2].lower()      # in case 'A:1:P' is used
+
+        # Sanity checks
+        # If pin number requested does not exist
+        if a_d not in {'a', 'd'}:
+            raise InvalidPinDefError("Invalid pin definition: command does not start with 'a' or 'd'")
+
+        if a_d == 'a' and pin_nr not in self.analog_pins:
+            raise InvalidPinDefError("Invalid pin definition: there is no analog pin with number {0}".format(pin_nr))
+        elif a_d == 'd' and pin_nr not in self.pins:
+            raise InvalidPinDefError("Invalid pin definition: there is no digital pin with number {0}".format(pin_nr))
+
+        # The pin exists, so lets grab it.
+        if a_d == 'a':
+            curr_pin = self.analog_pins[pin_nr]
         else:
-            pin.enable_reporting()
-        return pin
+            curr_pin = self.pins[pin_nr]
+        
+        # DEBUG
+        print("DEBUG: curr_pin:", curr_pin, type(curr_pin))
+        print("DEBUG: new_mode", new_mode)
+            
+        # If pin is unavailable:
+        if curr_pin.mode == UNAVAILABLE:
+            raise InvalidPinDefError('Invalid pin definition: UNAVAILABLE pin {0}'.format(pin_nr))
+        # If pin is taken:
+        if curr_pin.taken:
+            raise PinAlreadyTakenError("{0} pin {1} has been taken already".format(a_d, pin_nr))
+
+        # ok, should be available
+        # NB pin type checking (for digital/analog) should happen in Pin._set_mode()
+        if new_mode == 'p':
+            curr_pin.mode = PWM
+        elif new_mode == 's':
+            curr_pin.mode = SERVO
+        elif new_mode == 'o':
+            curr_pin.mode = OUTPUT
+        elif new_mode == 'i':
+            curr_pin.mode = INPUT
+        elif new_mode == 'a':
+            curr_pin.mode = ANALOG
+        elif new_mode == 'i2c':
+            curr_pin.mode = I2C
+
+        return curr_pin
 
 
 # -------------------
     def set_pin(self, pin, new_mode):
         """Implement Arduino 'pinMode' function 
+        
+        Note DV: isn't it better to change the mode directly?
+            e.g.    pin11 = board.pins[11]
+                    pin11.mode = 'pwm'
         """
         curr_pin = self.pins[pin]
         
@@ -865,7 +906,6 @@ class Pin(object):
             self.board.sp.write(msg)
 
         if self.INPUT_CAPABLE and self.mode == INPUT:
-#            self.port.enable_pin_reporting() # TODO This is not going to work for non-optimized boards like Mega
             
             myPort = self.get_port()
             self.board.ports[myPort].enable_reporting()
