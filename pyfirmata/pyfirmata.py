@@ -396,7 +396,16 @@ class Board(object):
         msg += bytearray([END_SYSEX])
         self.sp.write(msg)
 
+
+    def set_sampling_interval(self, time_interval):
+        """The sampling interval sets how often analog data and i2c data is 
+           reported to the client. The default value is 19 milliseconds.         
         
+        The 'time_interval' should be an integer (0 ... 32767)
+        """
+        self.send_sysex(SAMPLING_INTERVAL, to_two_bytes(time_interval))
+
+
     def bytes_available(self):
         return self.sp.inWaiting()
 
