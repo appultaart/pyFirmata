@@ -79,7 +79,7 @@ class Board(object):
     _command_handlers = {}
     pins = {}       # stores Pin information
     ports = {}      # stores Port information
-    map_analog_to_digital = {}      # key = analog, value = digital pin nr.
+    analog_pins = {}
     messages_received = []
 #    _command = None                  #DV not sure why this is here, it is not used?
 #    _stored_data = []                #DV not sure why this is here, it is not used?
@@ -233,8 +233,8 @@ class Board(object):
         curr_analog_counter = 0
         for dig_pin_nr in pin_list:
             if self.pins[dig_pin_nr].ANALOG_CAPABLE == True:
-                self.map_analog_to_digital[curr_analog_counter] = dig_pin_nr
-                self.pins[dig_pin_nr].ANALOG_QUERIED = curr_analog_counter
+                self.analog_pins[curr_analog_counter] = self.pins[dig_pin_nr]
+                self.analog_pins[curr_analog_counter].ANALOG_QUERIED = curr_analog_counter
                 curr_analog_counter += 1
 
         # assign the pins to ports
@@ -494,20 +494,15 @@ class Board(object):
         """Handle the incoming analog message.
         
         Note that the 'pin_nr' that is returned is the __analog__ pin number.
-        Because of this, the 'board.map_analog_to_digital' dict was created
-        to keep track of the A and D pin number of a pin.
+        Because of this, the 'board.analog_pins' dict was created
+        to refer to either the A or D functionality of a pin.
         """
-        
-#        print("In handle_analog_message: pinnr, lsb, msb = ", pin_nr, lsb, msb)
-  
-        # convert the Analog pin number to the digital pin number
-        pin_nr = self.map_analog_to_digital[pin_nr]
-        
+
         value = round(float((msb << 7) + lsb) / 1023, 4)
         # Only set the value if we are actually reporting
         try:
-            if self.pins[pin_nr].reporting:
-                self.pins[pin_nr].value = value
+            if self.analog_pins[pin_nr].reporting:
+                self.analog_pins[pin_nr].value = value
         except IndexError:
             raise ValueError
 
@@ -597,8 +592,7 @@ class Board(object):
         for nr in range(len(data)):
             if data[nr] != 0x7F:            # 0xF7/127: no analog pin
                 self.pins[nr].ANALOG_QUERIED = data[nr]
-                self.map_analog_to_digital[data[nr]] = self.pins[nr].pin_number
-
+                self.analog_pins[data[nr]] = self.pins[nr]
 
     def _handle_string_data(self, *data):
         """Handle incoming string data (0x71)
@@ -679,7 +673,7 @@ class Board(object):
         for i in self.ports:
             print("port:", i, self.ports[i].pins)
         
-        print("Map Analog-to-Digital:", self.map_analog_to_digital)
+        print("Analog pins:", self.analog_pins)
 
 
 
