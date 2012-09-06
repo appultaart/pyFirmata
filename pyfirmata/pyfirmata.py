@@ -1,5 +1,6 @@
 import inspect
 import time
+import sys
 
 import serial
 
@@ -425,6 +426,7 @@ class Board(object):
         while time.time() < cont:
             time.sleep(0)
             
+            
     def send_sysex(self, sysex_cmd, data):
         """
         Sends a SysEx msg.
@@ -449,6 +451,44 @@ class Board(object):
 
     def bytes_available(self):
         return self.sp.inWaiting()
+
+
+    def _manual_input_hex_values(self):
+        """Enter hex values to the board directly
+        
+        This function enables a programmer to interrupt his program,
+        and feed the Firmata raw hex values by entering them.
+        
+        Added for debugging and quick testing purpose
+        """
+    
+        keepGoing = True
+        while keepGoing:
+            if sys.version_info.major == 2:
+                # Python 2.x
+                myValues = raw_input("Add hex values, Q is stop:")
+            elif sys.version_info.major == 3:
+                # Python 3.x
+                myValues = input("Add hex values, Q is stop: ")
+            
+            bytesToSend = bytearray()
+            binRepresentation = ""
+        
+            for i in myValues.split():
+                if i in {'Q', 'q'}:
+                    keepGoing = False
+                    break 
+                else:
+                    i = int(i, 16)
+                    bytesToSend.append(i)
+                    binI = "{0:#010b}".format(i)
+                    binRepresentation += "{0} {1} - ".format(binI[2:6], binI[6:])
+            
+            print("The bytearray that will be sent: ", bytesToSend)
+            print("Translated as bits: ", binRepresentation)
+            self.sp.write(bytesToSend)
+        return
+
 
     def iterate(self):
         """ 
