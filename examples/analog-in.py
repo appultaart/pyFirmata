@@ -25,31 +25,35 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+
 import pyfirmata
 
 # Adjust that the port match your system, see samples below:
 # On Linux: /dev/tty.usbserial-A6008rIF, /dev/ttyACM0, 
 # On Windows: \\.\COM1, \\.\COM2
-PORT = '/dev/ttyACM0'
+PORT = '/dev/ttyUSB0'
+
+# Creates a new board -- use autodetect function 
+board = pyfirmata.Board(PORT, layout="autodetect", name='Arduino')
+
+it = pyfirmata.util.Iterator(board)
+it.start()
 
 # Definition of the analog pin
 PINS = (0, 1, 2, 3)
 
-# Creates a new board 
-board = pyfirmata.Arduino(PORT)
-print "Setting up the connection to the board ..."
-it = pyfirmata.util.Iterator(board)
-it.start()
-
 # Start reporting for defined pins
 for pin in PINS:
-    board.analog[pin].enable_reporting()
+    board.analog_pins[pin].mode = "analog"
+    board.analog_pins[pin].enable_reporting()
+
 
 # Loop for reading the input. Duration approx. 10 s
 for i in range(1, 11):
-    print "\nValues after %i second(s)" % i
+    print("\nValues after {0} second(s)".format(i))
     for pin in PINS:
-        print "Pin %i : %s" % (pin, board.analog[pin].read())
-    board.pass_time(1)
+        print("Pin {0} : {1}".format(pin, board.analog_pins[pin].read()))
+        print("Query: pin {0}:".format(board.analog_pins[pin].query_state()))
+    board.pass_time(2)
 
 board.exit()
