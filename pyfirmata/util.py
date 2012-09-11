@@ -153,6 +153,13 @@ def str_to_two_byte_iter(string):
         bytes += list(to_two_bytes(ord(char)))
     return bytes
 
+
+def send_as_two_bytes(board, val):
+    """Send an integer value as two 7-bit bytes to the board
+    """
+    board.sp.write(bytearray([val % 128, val >> 7]))
+
+
 def break_to_bytes(value):
     """
     Breaks a value into values of less than 255 that form value when multiplied.
