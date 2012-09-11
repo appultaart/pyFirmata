@@ -60,30 +60,42 @@ DIGITAL = OUTPUT   # same as OUTPUT below
 class PinAlreadyTakenError(Exception):
     pass
 
+
 class InvalidPinDefError(Exception):
     pass
     
+
 class NoInputWarning(RuntimeWarning):
     pass
     
+
 class Board(object):
     """
     Base class for any board
+    
+    A 'board' instance relates to a physical board onto which the Firmata
+    protocol is loaded. Such a 'board' instance:
+     - can communicate through serial communication with the physical board
+     - can receive and send Firmata-protocol messages to/from the board
+     - knows about the Pins and Ports that it contains in the physical world
+     - has, or can obtain, version number (etc) and debug information
     """
     firmata_version = None
     firmware = None
     firmware_version = None
     _command_handlers = {}
-    pins = {}       # stores Pin information
-    ports = {}      # stores Port information
-    analog_pins = {}
+    pins = {}           # stores information on all Pins (including Rx, Tx, analog)
+    ports = {}          # stores Port information
+    analog_pins = {}    # maps analog pin number to 'generic' Pin instance
     messages_received = []
-#    _command = None                  #DV not sure why this is here, it is not used?
-#    _stored_data = []                #DV not sure why this is here, it is not used?
-#    _parsing_sysex = False           #DV not sure why this is here, it is not used?
     
     def __init__(self, port, layout="autodetect", baudrate=57600, name=None):
         self.sp = serial.Serial(port, baudrate)
+        """Initialization of a 'board' instance
+        
+        A board can be initialized in two ways: by autodetect feature (which
+        is set to be the default), or by giving a predefined layout.
+        """
         # Allow 5 secs for Arduino's auto-reset to happen
         # Alas, Firmata blinks it's version before printing it to serial
         # For 2.3, even 5 seconds might not be enough.
@@ -103,9 +115,6 @@ class Board(object):
         self.add_cmd_handler(PIN_STATE_RESPONSE, self._handle_pin_state_query)
         self.add_cmd_handler(STRING_DATA, self._handle_string_data)
 
-#        if self.firmata_version is None and self.firmware is None:
-#            print("Has Firmata been installed on your board?")
-
         # Iterate over the first messages to get firmware data
         while self.bytes_available():
             self.iterate()
@@ -113,9 +122,9 @@ class Board(object):
         # Add layout-specific details to the board
         if layout == "autodetect":
             self.autodetect_layout()
-            # Iterate over the incoming Query Result message
-            # Note that this might take some time... If problems, check the
-            # autodetect-function and increase the pass_time() line.
+            # Iterate over the incoming Query Result message in this function
+            # might take some time... If problems, check the
+            # autodetect-function and increase the pass_time() line in there.
         else:
             self.predefined_layout(layout)
             
@@ -123,43 +132,43 @@ class Board(object):
     def __str__(self):
         return "Board {0.name} on {0.sp.port}".format(self)
         
+
     def __del__(self):
-        ''' 
+        """ 
         The connection with the a board can get messed up when a script is
         closed without calling board.exit() (which closes the serial
         connection). Therefore also do it here and hope it helps.
-        '''
+        """
         self.exit()
-        
-
-    def send_as_two_bytes(self, val):
-        self.sp.write(bytearray([val % 128, val >> 7]))
 
 
     def autodetect_layout(self):
-        """Use Capability Query to automatically detect board layout.
+        """Autodetect a board layout
+        
+        Use the SysEX Capability Query command to request information about 
+        the board layout automatically.
         """
-        print("INFO: Trying to auto-detect the board layout...")
+        print("INFO: Now trying to obtain the board's pin layout automatically...")
 
         # Send the Capability Query request
         self.sp.write(bytearray([0xF0, 0x6B, 0xF7]))
         # On Arduino Duemilanove, reading the full query takes ~ 0.03 s.
-        # If a board hangs on this step, try to increase the pass_time period
-        #     which adds more time to receive all data sent.
-        self.pass_time(2)
+        # If a board hangs on this step (i.e., the data is not returned fast
+        # enough), try to increase the pass_time period which adds more time 
+        # to receive all sent data.
+        self.pass_time(1)
         while self.bytes_available():
             self.iterate()
-        print("INFO: Capability Query Response received...")
 
-        # Send the Analog Mapping Query request
+        # Send the Analog Mapping Query request to fetch which pins have
+        # analog capability
         self.sp.write(bytearray([0xF0, 0x69, 0xF7]))
-        self.pass_time(2)
+        self.pass_time(1)
         while self.bytes_available():
             self.iterate()
-        print("INFO: Analog Mapping Query Response received...")
         
         # Construct the Ports. 
-        # CHECK It appears that two different approaches can be taken:
+        #  It appears that two different approaches can be taken:
         #  1. define Ports as 'having 8 pins', start with first pin reported, 
         #     add until 8 pins are found. This approach is taken by the 
         #     Firmata stand-alone test program found at http://www.pjrc.com/tmp/firmata/readme.html
@@ -169,13 +178,14 @@ class Board(object):
         #     pins 8-13 (i.e., 6 pins for this port). 
         # The Firmata protocol seems to use case (1), so let's follow that for now
         
-
-        # Get a sequence of pin numbers. Note that range(0, len(self.pins)) won't work:
-        # it is not guaranteed that pin numbers are all sequential and start at 0
+        #
+        # First, obtain a sequence of pin numbers for construction of a port.
+        # Note that range(0, len(self.pins)) won't work: it is not guaranteed 
+        # that pin numbers are all sequential and start at 0
         pin_nrs = []
         for pin in self.pins:
             pin_nrs.append(self.pins[pin].pin_number)
-        pin_nrs = sorted(pin_nrs)
+        pin_nrs = sorted(pin_nrs)       # all pin numbers are now known, sorted
 
         # bin the pins to ports
         total_ports = divmod(len(self.pins), 8)[0] + 1
@@ -183,21 +193,22 @@ class Board(object):
             pins_in_this_port = pin_nrs[0 + portNr*8:8 + portNr*8]
             self.ports[portNr] = Port(self, portNr, pins_in_this_port)
 
+        # (mainly for testing purposes: print out the detected board info)
         print("INFO: The board reports the following information:")
         self.report_board_information()
-
 
 
     def predefined_layout(self, board_layout):
         """
         Setup the Pin instances based on a given board-layout. 
         
-        (If the 'autodetect' function does not work....)
+        (Use this if the 'autodetect' function does not work, 
+        if startup speed is important, and the like)
         """
         # Assume that every digital port has INPUT, OUTPUT mode
-        # Number of pins is equal to the digital pins available (including UNAVAILABLE pins)
-#DEBUG        print("BOARD LAYOUT:", board_layout)
-
+        # Number of pins is equal to the digital pins available (including 
+        # UNAVAILABLE pins, such as Rx and Tx -- this to keep in line with
+        # the 'autodetect' functionality that does report such pins)
         for nr in board_layout['digital']:
             self.pins[nr] = Pin(self, nr)
             self.pins[nr].INPUT_CAPABLE = True
@@ -221,25 +232,24 @@ class Board(object):
         
         # Create an Analog to Digital mapping. Assume the first pin with 
         # Analog_capable is A0, the next A1, etc
-        # 1. Obtain a list of all the digital pin numbers (stored as dict, not ordered)
-        pin_list = []
-        for p in self.pins:
-            pin_list.append(self.pins[p].pin_number)
-        pin_list = sorted(pin_list)
-        # 2. Find the associated analog pins.
-        curr_analog_counter = 0
-        for dig_pin_nr in pin_list:
-            if self.pins[dig_pin_nr].ANALOG_CAPABLE == True:
-                self.analog_pins[curr_analog_counter] = self.pins[dig_pin_nr]
-                self.analog_pins[curr_analog_counter].ANALOG_QUERIED = curr_analog_counter
-                curr_analog_counter += 1
-
-        # assign the pins to ports
+        # This code is analogous to the code in '_handle_analog_mapping_query
+        #
+        # 1. Obtain a list of all the digital pin numbers. Note that it is not 
+        #    guaranteed that the pin numbers are sequential and start with 0.
         pin_nrs = []
         for pin in self.pins:
             pin_nrs.append(self.pins[pin].pin_number)
         pin_nrs = sorted(pin_nrs)
 
+        # 2. For each of the pins detected, find their associated analog pin.
+        curr_analog_counter = 0
+        for dig_pin_nr in pin_nrs:
+            if self.pins[dig_pin_nr].ANALOG_CAPABLE == True:
+                self.analog_pins[curr_analog_counter] = self.pins[dig_pin_nr]
+                self.analog_pins[curr_analog_counter].ANALOG_QUERIED = curr_analog_counter
+                curr_analog_counter += 1
+
+        # bin the pins to ports. Identical as in 'autodecect' function
         total_ports = divmod(len(self.pins), 8)[0] + 1
         for portNr in range(total_ports):
             pins_in_this_port = pin_nrs[0 + portNr*8:8 + portNr*8]
@@ -249,10 +259,9 @@ class Board(object):
         self.report_board_information()
 
 
-
     def add_cmd_handler(self, cmd, func):
         """ 
-        Adds a command handler for a command.
+        Adds a command handler to a SysEx command.
         """
         len_args = len(inspect.getargspec(func)[0])
         def add_meta(f):
@@ -268,26 +277,33 @@ class Board(object):
     def get_pin(self, pin_def):
         """
         Returns the activated pin given by the pin definition.
-        May raise an ``InvalidPinDefError`` or a ``PinAlreadyTakenError``.
         
         :arg pin_def: Pin definition as described in TODO,
             but without the arduino name. So for example ``a:1:i``.
         
-        (Comment DV: this function combines two separate functions:
+        Comment DV:
+        Kept for backwards compatibility reasons.
+
+        I propose that this function becomes depreciated. It combines
+        two separate functions:
           a) assign a pin instance to variable
           b) set the pin mode
-         I am not sure if this is the most elegant way to proceed here: 
-         generally speaking, combining two operations within one function
-         is not the best way to go IMO. 
-         
-         What's wrong with two lines: 
-            pin3 = board.pins[3]    # assign pin instance
-            pin3.mode = 'pwm'       # set the pin mode
-        Instead of the less easy to comprehend:
+        Generally speaking, combining two operations within one function may
+        lead to unclear code. In this case, the pin needs to be assigned only
+        once, but pin mode can switch in the course of the program. 
+        
+        In addition, this string-interpretation solution is not elegant and 
+        might lead to less readable code. To illustrate:
+
+        This method:
             pin3 = board.getpin('d:3:p')
-            
-         For now, I leave it here for compatibility reasons. I think it can
-         be marked for depreciation, though...)
+
+        Alternative method:
+            pin3 = board.pins[3]    
+            pin3.mode = 'pwm'
+        
+        Error handling in the 'Pin.read' and 'Pin.write' function will catch
+        the not correct assignment of a pin...
         """
         if type(pin_def) == list:
             bits = pin_def
@@ -301,32 +317,28 @@ class Board(object):
         # Sanity checks
         # If pin number requested does not exist
         if a_d not in {'a', 'd'}:
-            raise InvalidPinDefError("Invalid pin definition: command does not start with 'a' or 'd'")
+            raise InvalidPinDefError("Command does not start with 'a' or 'd'")
 
         if a_d == 'a' and pin_nr not in self.analog_pins:
-            raise InvalidPinDefError("Invalid pin definition: there is no analog pin with number {0}".format(pin_nr))
+            raise InvalidPinDefError("There is no analog pin with number {0}".format(pin_nr))
         elif a_d == 'd' and pin_nr not in self.pins:
-            raise InvalidPinDefError("Invalid pin definition: there is no digital pin with number {0}".format(pin_nr))
+            raise InvalidPinDefError("There is no digital pin with number {0}".format(pin_nr))
 
-        # The pin exists, so lets grab it.
+        # The pin exists, so lets grab the pin instance.
         if a_d == 'a':
             curr_pin = self.analog_pins[pin_nr]
         else:
             curr_pin = self.pins[pin_nr]
-        
-        # DEBUG
-        print("DEBUG: curr_pin:", curr_pin, type(curr_pin))
-        print("DEBUG: new_mode", new_mode)
-            
-        # If pin is unavailable:
+
+        # If pin is marked as unavailable:
         if curr_pin.mode == UNAVAILABLE:
-            raise InvalidPinDefError('Invalid pin definition: UNAVAILABLE pin {0}'.format(pin_nr))
+            raise InvalidPinDefError("Pin {0} is marked as being UNAVAILABLE".format(pin_nr))
         # If pin is taken:
         if curr_pin.taken:
             raise PinAlreadyTakenError("{0} pin {1} has been taken already".format(a_d, pin_nr))
 
-        # ok, should be available
-        # NB pin type checking (for digital/analog) should happen in Pin._set_mode()
+        # ok, we can use this pin instnace
+        # Note that pin type checking (digital/analog) happens in in Pin._set_mode()
         if new_mode == 'p':
             curr_pin.mode = PWM
         elif new_mode == 's':
@@ -340,54 +352,85 @@ class Board(object):
         elif new_mode == 'i2c':
             curr_pin.mode = I2C
 
-        return curr_pin
+        return curr_pin         # return the pin instance
 
 
-# -------------------
     def set_pin(self, pin, new_mode):
-        """Implement Arduino 'pinMode' function 
+        """Set the pin mode.
         
-        Note DV: isn't it better to change the mode directly?
-            e.g.    pin11 = board.pins[11]
+        This function is analogous to the Arduino 'pinMode' function.
+        It takes a pin number, and assignes a new mode to this pin.
+        
+        ## Suggested for removal ###
+        Comment DV: even though I've added this function, I think it is more
+                    elegant to change the mode directly (after all, we have
+                    getter/setter functionality in place). So perhaps this 
+                    function is not needed?
+                    
+                    board.set_pin(11, PWM)          # which is this function
+                        
+                        looks equivalent to the more elegant:
+                    pin11 = board.pins[11]
                     pin11.mode = 'pwm'
         """
         curr_pin = self.pins[pin]
         
         # check if ok to modify pin mode...
         if curr_pin.mode == UNAVAILABLE:
-            raise InvalidPinDefError("ERROR: Pin {0} is UNAVAILABLE".format(pin))
+            raise InvalidPinDefError("Pin {0} is UNAVAILABLE".format(pin))
         if new_mode not in {UNAVAILABLE, INPUT, OUTPUT, ANALOG, PWM, SERVO}:
-            raise InvalidPinDefError("ERROR: Mode {0} is not recognized".format(new_mode))
+            raise InvalidPinDefError("Mode {0} is not recognized".format(new_mode))
 
         # ok - pin can be set to the new mode
         curr_pin.mode = new_mode
 
 
     def read_pin(self, pin):
-        """Reads the value from a specified pin. 
+        """Reads the value from a pin. 
+        
+        There are two paradigms to read a pin value:
+            1)  board.read_pin(11)
+            2)  board.pins[11].read()
+
+        Where the latter can be made more readable by first assigning a pin
+        instance to a variable, and read out that variable:
+                pin11 = board.pins[11]
+                pin11.read()
+        
+        The paradigms differ in the view of whether a 'pin' instance should 
+        be able to itself read/write or if this must be controlled from the
+        'board' instance. In the physical world, it is the board that writes 
+        and the pin has no notion about its own status and value. This 
+        corresponds to (1). However, from a programming point it makes sense
+        to let the pin read/write stuff (2). 
+        
+        From a practical point of view there is no difference: under the hood,
+        the same variable is read ;)
         """
         curr_pin = self.pins[pin]
         
         # Check if pin is unavailable, or taken.
         if curr_pin.mode == UNAVAILABLE:
-            raise InvalidPinDefError("ERROR: Pin {0} is UNAVAILABLE".format(pin))
+            raise InvalidPinDefError("Pin {0} is UNAVAILABLE".format(pin))
         if curr_pin.taken is False:
-            raise InvalidPinDefError("ERROR: Pin {0} is not yet taken, value is undetermined. Use 'setPin()' command first".format(pin))
+            raise InvalidPinDefError("Pin {0} is not yet taken, value is undetermined. Use 'setPin()' command first".format(pin))
         
         # if Analog, but not reporting, raise error also....
         if curr_pin.mode == ANALOG and curr_pin.reporting == False:
-            raise InvalidPinDefError("ERROR: Pin {0} has 'reporting' set to False".format(pin))
+            raise InvalidPinDefError("Pin {0} has 'reporting' set to False".format(pin))
 
         return curr_pin.value
 
 
     def write_pin(self, pin, value):
         """
-        Output a voltage from the pin
-
-        :arg value: Uses value as a boolean if the pin is in output mode, or
-            expects a float from 0 to 1 if the pin is in PWM mode. If the pin 
-            is in SERVO the value should be in degrees.
+        Write a value to the pin.
+        
+        Depending on the pin mode, the value passed to the pin will differ.
+        If pin mode is: 
+            OUTPUT:     the value will be rounded to 0 or 1.
+            PWM:        the value is expected to be float between 0 and 1.
+            SERVO:      the value should be in degrees.
         """
         curr_pin = self.pins[pin]
 
@@ -400,6 +443,8 @@ class Board(object):
             curr_pin.value = value
 
             if curr_pin.mode is OUTPUT:
+                # Change value to boolean
+                curr_pin.value = int(round(curr_pin.value))
                 # find to which Port this pin belongs to
                 myPort = curr_pin.get_port()
                 self.ports[myPort].write()
@@ -415,9 +460,6 @@ class Board(object):
                 self.sp.write(msg)
 
 
-
-# -------------------
-
     def pass_time(self, t):
         """ 
         Non-blocking time-out for ``t`` seconds.
@@ -425,14 +467,14 @@ class Board(object):
         cont = time.time() + t
         while time.time() < cont:
             time.sleep(0)
-            
-            
+
+
     def send_sysex(self, sysex_cmd, data):
         """
-        Sends a SysEx msg.
+        Sends a SysEx message to the board.
         
         :arg sysex_cmd: A sysex command byte
-        : arg data: a bytearray of 7-bit bytes of arbitrary data
+        :arg data: a bytearray of 7-bit bytes of arbitrary data
         """
         msg = bytearray([START_SYSEX, sysex_cmd])
         msg += data
@@ -441,7 +483,9 @@ class Board(object):
 
 
     def set_sampling_interval(self, time_interval):
-        """The sampling interval sets how often analog data and i2c data is 
+        """Set the interval with which Firmata reports.
+        
+        The sampling interval sets how often analog data and i2c data is 
            reported to the client. The default value is 19 milliseconds.         
         
         The 'time_interval' should be an integer (0 ... 32767)
@@ -462,30 +506,30 @@ class Board(object):
         Added for debugging and quick testing purpose
         """
     
-        keepGoing = True
-        while keepGoing:
+        keep_going = True
+        while keep_going:
             if sys.version_info.major == 2:
                 # Python 2.x
-                myValues = raw_input("Add hex values, Q is stop:")
+                my_values = raw_input("Add hex values, Q is stop:")
             elif sys.version_info.major == 3:
                 # Python 3.x
-                myValues = input("Add hex values, Q is stop: ")
+                my_values = input("Add hex values, Q is stop: ")
             
-            bytesToSend = bytearray()
-            binRepresentation = ""
+            bytes_to_send = bytearray()
+            binary_representation = ""
         
-            for i in myValues.split():
+            for i in my_values.split():
                 if i in {'Q', 'q'}:
-                    keepGoing = False
+                    keep_going = False
                     break 
                 else:
                     i = int(i, 16)
-                    bytesToSend.append(i)
-                    binI = "{0:#010b}".format(i)
-                    binRepresentation += "{0} {1} - ".format(binI[2:6], binI[6:])
+                    bytes_to_send.append(i)
+                    binary_nr = "{0:#010b}".format(i)
+                    binary_representation += "{0} {1} - ".format(binary_nr[2:6], binary_nr[6:])
             
-            print("The bytearray that will be sent: ", bytesToSend)
-            print("Translated as bits: ", binRepresentation)
+            print("The bytearray that will be sent: ", bytes_to_send)
+            print("Translated as bits: ", binary_representation)
             self.sp.write(bytesToSend)
         return
 
@@ -502,6 +546,7 @@ class Board(object):
         data = ord(byte)
         received_data = []
         handler = None
+
         if data < START_SYSEX:
             # These commands can have 'channel data' like a pin nummber appended.
             try:
@@ -511,6 +556,7 @@ class Board(object):
             received_data.append(data & 0x0F)
             while len(received_data) < handler.bytes_needed:
                 received_data.append(ord(self.sp.read()))
+
         elif data == START_SYSEX:
             data = ord(self.sp.read())
             handler = self._command_handlers.get(data)
@@ -520,6 +566,7 @@ class Board(object):
             while data != END_SYSEX:
                 received_data.append(data)
                 data = ord(self.sp.read())
+
         else:
             try:
                 handler = self._command_handlers[data]
@@ -532,16 +579,21 @@ class Board(object):
             handler(*received_data)
         except ValueError:
             pass
+
             
     def get_firmata_version(self):
         """
-        Returns a version tuple (major, mino) for the firmata firmware on the
-        board.
+        Returns the firmata firmware version of the board.
+        
+        Return value is a tuple (major, minor)
         """
         return self.firmata_version
+
         
     def servo_config(self, pin, min_pulse=544, max_pulse=2400, angle=0):
         """
+        Configure a servo pin.
+
         Configure a pin as servo with min_pulse, max_pulse and first angle.
         ``min_pulse`` and ``max_pulse`` default to the arduino defaults.
         """
@@ -569,6 +621,7 @@ class Board(object):
                 self.pins[pin].mode = OUTPUT
         if hasattr(self, 'sp'):
             self.sp.close()
+
         
     # Command handlers
     def _handle_analog_message(self, pin_nr, lsb, msb):
@@ -591,7 +644,7 @@ class Board(object):
     def _handle_digital_message(self, port_nr, lsb, msb):
         """
         Digital messages always go by the whole port. This means we have a
-        bitmask wich we update the port.
+        bitmask with which the port is updated.
         """
         mask = (msb << 7) + lsb
         try:
@@ -601,10 +654,12 @@ class Board(object):
 
 
     def _handle_report_version(self, major, minor):
+        """Obtain the firmware version, as reported by the Firmata protocol"""
         self.firmata_version = (major, minor)
 
 
     def _handle_report_firmware(self, *data):
+        """Obtain the firmware version and name, as reported by the Firmata protocol"""
         major = data[0]
         minor = data[1]
         self.firmware_version = (major, minor)
@@ -624,8 +679,7 @@ class Board(object):
           implementations where PWM, Analog and others may have different resolution. 
         """
 
-        print("INFO: Analyzing the board Capability Query response...")
-        print("INFO: There are {0} pins detected".format(data.count(0x7F)))
+        print("Analyzing the board's Capability Query response: {0} pins detected".format(data.count(0x7F)))
                 
         for nr in range(data.count(0x7F)):
             pin_info = data[:data.index(0x7F)]
@@ -640,8 +694,7 @@ class Board(object):
 
             elif len(pin_info) % 2 != 0:
                 # each pin has 2 bytes per mode; if odd length, something is wrong
-                raise IOError("ERROR: Pin {0} reports incorrect mode information: {1}"
-                       .format(nr, pin_info))
+                raise IOError("Pin {0} reports incorrect mode information: {1}".format(nr, pin_info))
 
             else:
                 for mode_info in range(0, len(pin_info), 2):
@@ -664,16 +717,17 @@ class Board(object):
 
     def _handle_analog_mapping_query(self, *data):
         """
-        Query the microcontroller board for which pins are mapped as analog
+        Query the microcontroller board for which pins are mapped as analog.
         This is the answer to the query 'F0 69 F7'.        
         """
         print("INFO: Analyzing the board Analog Mapping response...")
-        print("INFO: {0} pins will be analyzed".format(len(data)))
+        print("Analyzing the board's Analog Mapping response: {0} pins to be analyzed".format(len(data)))
 
         for nr in range(len(data)):
             if data[nr] != 0x7F:            # 0xF7/127: no analog pin
                 self.pins[nr].ANALOG_QUERIED = data[nr]
                 self.analog_pins[data[nr]] = self.pins[nr]
+
 
     def _handle_string_data(self, *data):
         """Handle incoming string data (0x71)
@@ -688,33 +742,33 @@ class Board(object):
             msg.append(chr(together))
         
         print("Firmata sent the message '{0}'".format("".join(msg)))
-        # store the message, in case someone tests for a message appearing
+
+        # Since this function is called from within a handle, to simply return
+        # the value will not (always) work as expected. Therefore, the 
+        # messages received are stored inside the board.messages_received' 
+        # variable -- especially relevant for I2C reports. In this way, the 
+        # program can read back all messages received by querying this variable.
         self.messages_received.append("".join(msg))
 
 
     def _handle_pin_state_query(self, *data):
         """
-        Query the microcontroller board for one pin state.
-        This is the answer to the query 'F0 6D [pin] F7'. 
+        Query the microcontroller board for one pin's state.
+        This is the answer to the query 'F0 6D [pin_number] F7'. 
         
         (Note: make sure that all data are captured, for example by 
         running the 'iter.Iterator(board)' function continuously.
         """
         queried_pin = data[0]
         queried_mode = data[1]
-        
-        if len(data[2:]) == 1:
-            queried_state = data[2]
-        else:
-            queried_state = data[2:]
+        queried_state = data[2:]
 
         print("Pin {0} has mode {1} with data {2}".
                 format(queried_pin, queried_mode, queried_state))
 
 
-
     def report_board_information(self):
-        """Reports general information about the current board"""
+        """Print general information about the current board"""
 
         analog = []
         servo = []
@@ -752,10 +806,7 @@ class Board(object):
         print(report)
         
         for i in self.ports:
-            print("port:", i, self.ports[i].pins)
-        
-        print("Analog pins:", self.analog_pins)
-
+            print("\tPort {0} with pins {1}".format(i, self.ports[i].pins))
 
 
 class Port(object):
@@ -768,9 +819,10 @@ class Port(object):
 
 
     def __str__(self):
+        """Return readable information of a Port instance"""
         return "Port {0.port_number} on {0.board}".format(self)
 
-        
+
     def enable_reporting(self):
         """ Enable reporting of values for the whole port """
         self.reporting = True
@@ -781,7 +833,7 @@ class Port(object):
             if self.board.pins[pin].mode == INPUT:
                 self.board.pins[pin].reporting = True # TODO Shouldn't this happen at the pin?
 
-        
+
     def disable_reporting(self):
         """ Disable the reporting of the port """
         self.reporting = False
@@ -794,9 +846,8 @@ class Port(object):
 
     def write(self):
         """Set the output pins of the port to the correct state"""
-
         mask = 0
-        
+
         # only report for pins that are taken, and OUTPUT, and have value 
         for pin in self.pins:
             if self.board.pins[pin].taken == True:
@@ -824,7 +875,8 @@ class Pin(object):
     """ A Pin representation 
     
     Each 'pin' instance is linked to a physical pin on the board. 
-    It stores information about its own state, value, capabilities, etc.
+    It stores information about its own state, value, capabilities, etc.,
+    but does not necessarily know a lot about other Pins, Ports, and the board.
     """
     def __init__(self, board, pin_number):
         self.board = board
@@ -844,6 +896,7 @@ class Pin(object):
 
 
     def __str__(self):
+        """Print Pin information in readable format"""
         return "Pin {0.pin_number}, mode {0.mode}, value {0.value}".format(self)
 
 
@@ -934,7 +987,9 @@ class Pin(object):
     """
     Mode of operation for the pin. 
 
-    Can be one of the pin modes: UNAVAILABLE, INPUT, OUTPUT, ANALOG, PWM, SERVO, I2C
+    Can be one of the pin modes: UNAVAILABLE, INPUT, OUTPUT, ANALOG, PWM, 
+    SERVO, I2C, 'unavailable', 'input', 'output', 'analog', 'pwm', 'servo', 'i2c'
+    (See the Pin._set_mode() function for details)
     """
 
 
@@ -999,13 +1054,11 @@ class Pin(object):
         of the hardware's configuration. This query can also be used to 
         verify pin mode settings are received properly.
         """
-
         self.board.sp.write(bytearray([START_SYSEX, PIN_STATE_QUERY, self.pin_number, END_SYSEX]))
 
 
-
     def report_pin_information(self):
-        """Print the pin state onto the screen -- (for debugging purposes)"""
+        """Print the Pin state onto the screen"""
 
         report = """> Report on Pin {0.pin_number}:
                     > mode            = {0.mode}
@@ -1020,4 +1073,3 @@ class Pin(object):
                     > reporting       = {0.reporting}""".format(self)
         print(report)
         return
-
