@@ -346,7 +346,10 @@ class Board(object):
         elif new_mode == 'o':
             curr_pin.mode = OUTPUT
         elif new_mode == 'i':
-            curr_pin.mode = INPUT
+            if a_d == 'a':
+                curr_pin.mode = ANALOG
+            else:
+                curr_pin.mode = INPUT
         elif new_mode == 'a':
             curr_pin.mode = ANALOG
         elif new_mode == 'i2c':
@@ -378,7 +381,8 @@ class Board(object):
         # check if ok to modify pin mode...
         if curr_pin.mode == UNAVAILABLE:
             raise InvalidPinDefError("Pin {0} is UNAVAILABLE".format(pin))
-        if new_mode not in {UNAVAILABLE, INPUT, OUTPUT, ANALOG, PWM, SERVO}:
+        if new_mode not in {UNAVAILABLE, INPUT, OUTPUT, ANALOG, PWM, SERVO, I2C,
+                             'unavailable', 'input', 'output', 'analog', 'pwm', 'servo', 'i2c'}:
             raise InvalidPinDefError("Mode {0} is not recognized".format(new_mode))
 
         # ok - pin can be set to the new mode
@@ -420,7 +424,9 @@ class Board(object):
             raise InvalidPinDefError("Pin {0} has 'reporting' set to False".format(pin))
 
         return curr_pin.value
-
+        # TODO the reporting of a pin is not 100% correct. Here, test 
+        # if a pin is set to report
+        
 
     def write_pin(self, pin, value):
         """
