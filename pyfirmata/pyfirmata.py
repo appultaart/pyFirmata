@@ -337,7 +337,7 @@ class Board(object):
         if curr_pin.taken:
             raise PinAlreadyTakenError("{0} pin {1} has been taken already".format(a_d, pin_nr))
 
-        # ok, we can use this pin instnace
+        # ok, we can use this pin instance
         # Note that pin type checking (digital/analog) happens in in Pin._set_mode()
         if new_mode == 'p':
             curr_pin.mode = PWM
@@ -354,6 +354,9 @@ class Board(object):
             curr_pin.mode = ANALOG
         elif new_mode == 'i2c':
             curr_pin.mode = I2C
+
+        # If analog or digital_input, run enable_reporting
+        curr_pin.enable_reporting()
 
         return curr_pin         # return the pin instance
 
@@ -419,13 +422,12 @@ class Board(object):
         if curr_pin.taken is False:
             raise InvalidPinDefError("Pin {0} is not yet taken, value is undetermined. Use 'setPin()' command first".format(pin))
         
-        # if Analog, but not reporting, raise error also....
-        if curr_pin.mode == ANALOG and curr_pin.reporting == False:
+        # if a pin is not tagged for reporting, raise error also....
+        if curr_pin.reporting == False:
             raise InvalidPinDefError("Pin {0} has 'reporting' set to False".format(pin))
 
         return curr_pin.value
-        # TODO the reporting of a pin is not 100% correct. Here, test 
-        # if a pin is set to report
+        # TODO the reporting of a pin is not 100% correct. 
         
 
     def write_pin(self, pin, value):
@@ -920,9 +922,9 @@ class Pin(object):
         # Some sanity checks
         if new_mode not in {UNAVAILABLE, INPUT, OUTPUT, ANALOG, PWM, SERVO, I2C,
                              'unavailable', 'input', 'output', 'analog', 'pwm', 'servo', 'i2c'}:
-            raise InvalidPinDefError("ERROR: Mode {0} is not recognized".format(new_mode))
+            raise InvalidPinDefError("Mode {0} is not recognized".format(new_mode))
         if self._mode in {UNAVAILABLE, 'unavailable'}:
-            raise InvalidPinDefError("ERROR: Pin {0} is UNAVAILABLE".format(self.pin_nr))
+            raise InvalidPinDefError("Pin {0} is UNAVAILABLE".format(self.pin_nr))
         if self.taken == True:
             print("WARNING: Pin {0} is already taken".format(self.pin_nr))
 
@@ -941,7 +943,7 @@ class Pin(object):
                 self.reporting = False      # reporting is set per digital port
                 self.taken = True
             else:
-                raise InvalidPinDefError("ERROR: Pin {0} has no INPUT mode".format(self.pin_number))
+                raise InvalidPinDefError("Pin {0} has no INPUT mode".format(self.pin_number))
 
         elif new_mode in {OUTPUT, 'output'}:
             if self.OUTPUT_CAPABLE:
@@ -1003,12 +1005,13 @@ class Pin(object):
         """ Set an input pin to report values """
 
         if self.ANALOG_CAPABLE and self.mode == ANALOG:
+            # Firmata protocol: analog reporting goes per pin
             self.reporting = True
             msg = bytearray([REPORT_ANALOG + self.ANALOG_QUERIED, 1])
             self.board.sp.write(msg)
 
         if self.INPUT_CAPABLE and self.mode == INPUT:
-            
+            # Firmata protocol: digital reporting goes per port
             myPort = self.get_port()
             self.board.ports[myPort].enable_reporting()
 
@@ -1076,6 +1079,7 @@ class Pin(object):
                     > SERVO_CAPABLE   = {0.SERVO_CAPABLE}
                     > PWM_CAPABLE     = {0.PWM_CAPABLE}
                     > I2C_CAPABLE     = {0.I2C_CAPABLE}
+                    > pin is taken    = {0.taken}
                     > reporting       = {0.reporting}""".format(self)
         print(report)
         return
