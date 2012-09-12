@@ -64,7 +64,6 @@ There are various ways to assign a variable to a specific pin. These approaches 
 2. Use the ``get_pin`` method. You specify what pin you need by a string, such as ``a:2:i``. The string consists of three parts, separated by ':'. The first part us either 'a' or 'd', depending on wether you need an analog or digital pin. The second part indicates the pin number. The mode is the third part of the string. Mode values are 'i' for input, 'o' for output, 'p' for pwm, 's' for servo, 'i2c' for I2C, and 'a' for analog input. 
 
     >>> analog_0 = board.get_pin('a:0:1')
-    >>> analog_0.enable_reporting()
     >>> analog_0.read()
     0.6614
     >>> pin3 = board.get_pin('d:3:p')
@@ -72,12 +71,12 @@ There are various ways to assign a variable to a specific pin. These approaches 
 
 Enable reporting
 ----------------
-Before reading data from a pin, Firmata must be instructed to enable reporting for a pin. This is done with the ''enable_reporting'' method. The pin's value can now be read by the pin's ''read'' method as is done above, or by directly reporting its ''value'' variable.
+Before reading data from a pin, Firmata must be instructed to enable reporting for a pin. This is done automatically in most cases (such as when setting the 'input' or 'analog' mode of a pin). As there might be at times an error message that informs that a pin is 'not enabled', explicitly calling the ''enable_reporting'' method might solve the issue. 
 
     >>> anaPin = board.analog_pins[2]
     >>> anaPin.mode = 'analog'
     >>> anaPin.enable_reporting()
-    >>> print("Value:", anaPin.value)
+    >>> print("Value:", anaPin.read())
     0.6614
 
 Setting the sampling interval
