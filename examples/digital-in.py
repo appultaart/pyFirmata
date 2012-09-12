@@ -30,30 +30,25 @@ import pyfirmata
 # Adjust that the port match your system, see samples below:
 # On Linux: /dev/tty.usbserial-A6008rIF, /dev/ttyACM0, 
 # On Windows: \\.\COM1, \\.\COM2
-PORT = '/dev/ttyACM0'
+PORT = '/dev/ttyUSB0'
 
-# Definition of the analog pin
-PINS = (0, 1, 2, 3)
 
-# Creates a new board 
-board = pyfirmata.Arduino(PORT)
-print "Setting up the connection to the board ..."
+# Creates a new board, using the 'autodetect' functionality
+board = pyfirmata.Board(PORT, layout="autodetect", name='Arduino')
 
 # Setup the digital pin
-digital_0 = board.get_pin('d:6:i')
+digital_0 = board.get_pin('d:5:i')
 it = pyfirmata.util.Iterator(board)
 it.start()
-digital_0.enable_reporting()
 
-while (True):
-    #print "Button state: %s" % digital_0.read()
+while True:
     # The return values are: True False, and None
     if str(digital_0.read()) == 'True':
-        print "Button pressed"
+        print("Button pressed")
     elif str(digital_0.read()) == 'False':
-        print "Button not pressed"
+        print("Button not pressed")
     else: 
-        print "Button was never pressed"
+        print("Button was never pressed")
     board.pass_time(0.5)
 
 board.exit()

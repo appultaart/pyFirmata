@@ -27,19 +27,30 @@
 
 import pyfirmata
 
-PORT = '/dev/ttyACM0'
+# On the Arduino, connect a LED to digital pin 11 for this example to work
+# (Don't forget to add resistors, if your LED requires it)
+
+
+# Adjust that the port match your system, see samples below:
+# On Linux: /dev/tty.usbserial-A6008rIF, /dev/ttyACM0, 
+# On Windows: \\.\COM1, \\.\COM2
+PORT = '/dev/ttyUSB0'
 
 # Time (approx. seconds) to get to the maximum/minimum
 DURATION = 5
 # Numbers of steps to get to the maximum/minimum
 STEPS = 10 
 
-# Creates a new board and define the pin
-board = pyfirmata.Arduino(PORT)
-# Pin use one that supoorts ~ (PWM) (e.g. 3, 5, 6, 9, 10, or 11)
-digital_0 = board.get_pin('d:11:p')
+# Creates a new board, using autodetect
+board = pyfirmata.Board(PORT, layout="autodetect", name='Arduino')
 
-# Waiting time between the 
+# Pin use one that supports ~ (PWM) (e.g. 3, 5, 6, 9, 10, or 11 on Arduino)
+# digital_0 = board.get_pin('d:11:p')
+# or, using an alternative pin assignment that is equivalent to the one above...
+digital_0 = board.pins[11]
+digital_0.mode = 'pwm'
+
+# Waiting time between the LED flash
 wait_time = DURATION/float(STEPS)
 
 # Up
