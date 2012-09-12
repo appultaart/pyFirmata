@@ -40,10 +40,12 @@ Analog and Digital pins
 -----------------------
 All of the pins on Arduino-like boards can be used as digital input/output. However, some pins can read 10-bit (0...1023) values, a property that make them useful to read analog sensors, for example. Hence, these pins are termed ``analog pins``. 
 In the current pyFirmata code, the ``board`` instance stores pin information in two ways. The ``board.pins`` dict stores all pins (*i.e.*, all digital pins), including pins that are reported as unavailable such as Rx and Tx. The ``board.analog_pins`` dict stores those pins with analog capability, where the key is the analog pin number.
-Thus, the following two variables point to the identical pin instance::
+Thus, the following two variables point to the identical pin instance: 
 
     >>> digitalPin = board.pins[14]
     >>> analogPin = board.analog_pins[0]
+    >>> id(digitalPin) == id(analogPin)
+    True
 
 
 Assigning pins
@@ -71,7 +73,7 @@ There are various ways to assign a variable to a specific pin. These approaches 
 
 Enable reporting
 ----------------
-Before reading data from a pin, Firmata must be instructed to enable reporting for a pin. This is done automatically in most cases (such as when setting the 'input' or 'analog' mode of a pin). As there might be at times an error message that informs that a pin is 'not enabled', explicitly calling the ''enable_reporting'' method might solve the issue. 
+Before reading data from a pin, Firmata must be instructed to enable reporting for a pin. This is done automatically in most cases (such as when setting the 'input' or 'analog' mode of a pin). However, at times an error message might show up that informs that a pin is 'not enabled'. In that case, explicitly calling the ''enable_reporting'' method might solve the issue. 
 
     >>> anaPin = board.analog_pins[2]
     >>> anaPin.mode = 'analog'
@@ -99,8 +101,9 @@ If you want to use a board with a different layout than the standard Arduino, or
     ...         'disabled' : (0, 1, 14, 15) # Rx, Tx, Crystal
     ...         }
 
+
 Todo
 ====
 The adaptation of the pyFirmata protocol for Python3 turned out to involve quite a bit of code rewrite. For one reason, handling of string/byte data is handled differently in Python2 and Python3. For another reason, the implementation of automatic capability query required internal restructuring of the Pin and Port instances.
 
-Therefore, TESTING TESTING TESTING is needed.
+The ``test.py`` and ``mockup`` parts of pyFirmata do not function as of now. Therefore, TESTING TESTING TESTING is needed.
