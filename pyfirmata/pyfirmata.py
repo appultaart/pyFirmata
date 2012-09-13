@@ -604,6 +604,8 @@ class Board(object):
 
         Configure a pin as servo with min_pulse, max_pulse and first angle.
         ``min_pulse`` and ``max_pulse`` default to the arduino defaults.
+        
+        Note that this method is also implemented in the 'Pin' class.
         """
         if self.pins[pin].SERVO_CAPABLE == False:
             raise IOError("Pin {0} is not a valid servo pin".format(pin))
@@ -926,7 +928,7 @@ class Pin(object):
         if self._mode in {UNAVAILABLE, 'unavailable'}:
             raise InvalidPinDefError("Pin {0} is UNAVAILABLE".format(self.pin_nr))
         if self.taken == True:
-            print("WARNING: Pin {0} is already taken".format(self.pin_nr))
+            print("WARNING: Pin {0} is already taken".format(self.pin_number))
 
         # Set the mode
         if new_mode in {UNAVAILABLE, 'unavailable'}:
@@ -1064,6 +1066,34 @@ class Pin(object):
         verify pin mode settings are received properly.
         """
         self.board.sp.write(bytearray([START_SYSEX, PIN_STATE_QUERY, self.pin_number, END_SYSEX]))
+
+
+    def servo_config(self, min_pulse=544, max_pulse=2400, angle=0):
+        """
+        Configure a servo pin.
+
+        Configure a pin as servo with min_pulse, max_pulse and first angle.
+        ``min_pulse`` and ``max_pulse`` default to the arduino defaults.
+        
+        NOTE: While there is also a 'board.servo_config()' method, the advantage of
+        this method inside the Pin class is that a pin can be assigned to a 
+        variable, and then the servo_config can be activated:
+            pin11 = board.pins[7]
+            pin11.servo_config()        
+        """
+        if self.SERVO_CAPABLE == False:
+            raise IOError("Pin {0} is not a valid servo pin".format(pin))
+        if self.mode == UNAVAILABLE:
+            raise IOError("Pin {0} is UNAVAILABLE for Servo use".format(pin))
+                
+        data = bytearray([self.pin_number])
+        data += to_two_bytes(min_pulse)
+        data += to_two_bytes(max_pulse)
+        self.board.send_sysex(SERVO_CONFIG, data)
+        
+        # set pin._mode to SERVO so that it sends analog messages
+        self.mode = SERVO
+        self.write(angle)
 
 
     def report_pin_information(self):
