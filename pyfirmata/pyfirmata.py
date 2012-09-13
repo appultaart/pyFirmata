@@ -803,7 +803,7 @@ class Board(object):
                                     format(self.pins[pin]))
         
         report = """
-        > Board {0.name}, running '{0.firmware}' version {0.firmata_version[0]}.{0.firmata_version[1]}.
+        > Board {0.name}, running '{0.firmware}' version {0.firmata_version}.
         > Port {0.sp.port}, serial info {0.sp}
 
         > Pin information
